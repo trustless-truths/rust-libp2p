@@ -19,7 +19,7 @@
 // DEALINGS IN THE SOFTWARE.
 
 use super::dns;
-use crate::{META_QUERY_SERVICE_FQDN, SERVICE_NAME_FQDN};
+use crate::{META_QUERY_SERVICE_FQDN_SUFFIX, SERVICE_NAME_FQDN_SUFFIX};
 use hickory_proto::{
     op::Message,
     rr::{Name, RData},
@@ -45,19 +45,26 @@ pub(crate) enum MdnsPacket {
 
 impl MdnsPacket {
     pub(crate) fn new_from_bytes(
+        name: &str,
         buf: &[u8],
         from: SocketAddr,
     ) -> Result<Option<MdnsPacket>, hickory_proto::error::ProtoError> {
         let packet = Message::from_vec(buf)?;
 
         if packet.query().is_none() {
-            return Ok(Some(MdnsPacket::Response(MdnsResponse::new(&packet, from))));
+            return Ok(Some(MdnsPacket::Response(MdnsResponse::new(
+                name, &packet, from,
+            ))));
         }
 
+        let mut service_name = SERVICE_NAME_FQDN_SUFFIX.to_string();
+        if !name.is_empty() {
+            service_name = format!("{}.{}", name, SERVICE_NAME_FQDN_SUFFIX);
+        }
         if packet
             .queries()
             .iter()
-            .any(|q| q.name().to_utf8() == SERVICE_NAME_FQDN)
+            .any(|q| q.name().to_utf8() == service_name)
         {
             return Ok(Some(MdnsPacket::Query(MdnsQuery {
                 from,
@@ -65,10 +72,14 @@ impl MdnsPacket {
             })));
         }
 
+        let mut meta_name = META_QUERY_SERVICE_FQDN_SUFFIX.to_string();
+        if !name.is_empty() {
+            meta_name = format!("{}.{}", name, META_QUERY_SERVICE_FQDN_SUFFIX);
+        }
         if packet
             .queries()
             .iter()
-            .any(|q| q.name().to_utf8() == META_QUERY_SERVICE_FQDN)
+            .any(|q| q.name().to_utf8() == meta_name)
         {
             // TODO: what if multiple questions, one with SERVICE_NAME and one with META_QUERY_SERVICE?
             return Ok(Some(MdnsPacket::ServiceDiscovery(MdnsServiceDiscovery {
@@ -147,12 +158,17 @@ pub(crate) struct MdnsResponse {
 
 impl MdnsResponse {
     /// Creates a new `MdnsResponse` based on the provided `Packet`.
-    pub(crate) fn new(packet: &Message, from: SocketAddr) -> MdnsResponse {
+    pub(crate) fn new(name: &str, packet: &Message, from: SocketAddr) -> MdnsResponse {
+        let mut service_name = SERVICE_NAME_FQDN_SUFFIX.to_string();
+        if !name.is_empty() {
+            service_name = format!("{}.{}", name, SERVICE_NAME_FQDN_SUFFIX);
+        }
+
         let peers = packet
             .answers()
             .iter()
             .filter_map(|record| {
-                if record.name().to_string() != SERVICE_NAME_FQDN {
+                if record.name().to_string() != service_name {
                     return None;
                 }
 
@@ -322,11 +338,14 @@ mod tests {
         addr2.push(Protocol::P2p(peer_id));
 
         let packets = build_query_response(
+            "test",
             0xf8f8,
             peer_id,
             vec![&addr1, &addr2].into_iter(),
             Duration::from_secs(60),
         );
+
+        let service_name = format!("test.{}", SERVICE_NAME_FQDN_SUFFIX);
 
         for bytes in packets {
             let packet = Message::from_vec(&bytes).expect("unable to parse packet");
@@ -334,7 +353,7 @@ mod tests {
                 .answers()
                 .iter()
                 .filter_map(|record| {
-                    if record.name().to_utf8() != SERVICE_NAME_FQDN {
+                    if record.name().to_utf8() != service_name {
                         return None;
                     }
                     let Some(RData::PTR(record_value)) = record.data() else {

@@ -102,6 +102,8 @@ pub(crate) struct InterfaceState<U, T> {
     ttl: Duration,
     probe_state: ProbeState,
     local_peer_id: PeerId,
+    /// The named network to limit discovery to.
+    name: String,
 }
 
 impl<U, T> InterfaceState<U, T>
@@ -180,6 +182,7 @@ where
             ttl: config.ttl,
             probe_state: Default::default(),
             local_peer_id,
+            name: config.name,
         })
     }
 
@@ -208,7 +211,7 @@ where
             // 1st priority: Low latency: Create packet ASAP after timeout.
             if this.timeout.poll_next_unpin(cx).is_ready() {
                 tracing::trace!(address=%this.addr, "sending query on iface");
-                this.send_buffer.push_back(build_query());
+                this.send_buffer.push_back(build_query(&this.name));
                 tracing::trace!(address=%this.addr, probe_state=?this.probe_state, "tick");
 
                 // Stop to probe when the initial interval reach the query interval
@@ -262,8 +265,9 @@ where
             match this
                 .recv_socket
                 .poll_read(cx, &mut this.recv_buffer)
-                .map_ok(|(len, from)| MdnsPacket::new_from_bytes(&this.recv_buffer[..len], from))
-            {
+                .map_ok(|(len, from)| {
+                    MdnsPacket::new_from_bytes(&this.name, &this.recv_buffer[..len], from)
+                }) {
                 Poll::Ready(Ok(Ok(Some(MdnsPacket::Query(query))))) => {
                     tracing::trace!(
                         address=%this.addr,
@@ -272,6 +276,7 @@ where
                     );
 
                     this.send_buffer.extend(build_query_response(
+                        &this.name,
                         query.query_id(),
                         this.local_peer_id,
                         this.listen_addresses
@@ -306,8 +311,11 @@ where
                         "received service discovery from remote address on address"
                     );
 
-                    this.send_buffer
-                        .push_back(build_service_discovery_response(disc.query_id(), this.ttl));
+                    this.send_buffer.push_back(build_service_discovery_response(
+                        &this.name,
+                        disc.query_id(),
+                        this.ttl,
+                    ));
                     continue;
                 }
                 Poll::Ready(Err(err)) if err.kind() == std::io::ErrorKind::WouldBlock => {
