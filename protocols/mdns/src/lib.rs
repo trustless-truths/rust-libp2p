@@ -35,6 +35,8 @@
 
 #![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
 
+use std::error::Error;
+use std::fmt;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
 
@@ -59,6 +61,19 @@ const META_QUERY_SERVICE_FQDN_SUFFIX: &str = "_services._dns-sd._udp.local.";
 pub const IPV4_MDNS_MULTICAST_ADDRESS: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 251);
 pub const IPV6_MDNS_MULTICAST_ADDRESS: Ipv6Addr = Ipv6Addr::new(0xFF02, 0, 0, 0, 0, 0, 0, 0xFB);
 
+#[derive(Debug)]
+pub enum ConfigError {
+    InvalidCharacter,
+}
+
+impl fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl Error for ConfigError {}
+
 /// Configuration for mDNS.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -74,11 +89,6 @@ pub struct Config {
     pub enable_ipv6: bool,
     /// A name string for limiting discovery.
     name: String,
-}
-
-#[derive(Debug)]
-pub enum ConfigError {
-    InvalidCharacter,
 }
 
 impl Default for Config {
@@ -100,7 +110,7 @@ impl Config {
 
     /// Set the discovery-limiting name to a valid string.
     pub fn set_name(mut self, name: &str) -> Result<Self, ConfigError> {
-        if name.contains('.') {
+        if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
             return Err(ConfigError::InvalidCharacter);
         }
         self.name = name.to_string();
